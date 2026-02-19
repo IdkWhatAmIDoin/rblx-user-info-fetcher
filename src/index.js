@@ -9,8 +9,13 @@ export default {
       let userId = body.userId;
       const username = body.username;
       const groupId = body.groupId;
-
-      // if user is using username instead of userid, handles it correctly
+      // optional rquest body fields
+      const includeAvatar = body.includeAvatar || false;
+      const includePresence = body.includePresence || false;
+      const includeFriendsCount = body.includeFriendsCount || false;
+      const includeFollowersCount = body.includeFollowersCount || false;
+      const includeFollowingCount = body.includeFollowingCount || false;
+      const includeGroups = body.includeGroups !== false;
       if (!userId && username) {
         const userRes = await fetch("https://users.roblox.com/v1/usernames/users", {
           method: "POST",
@@ -24,70 +29,130 @@ export default {
           return new Response(JSON.stringify({ error: "Username not found on Roblox" }), { status: 404 });
         }
       }
-      // BREAKING NEWS!!! dumbasses dont provide a username OR an id!!!
+
       if (!userId) {
         return new Response(JSON.stringify({ error: "No userId or username provided" }), { status: 400 });
       }
-
-      // fetches user id and group info about the user
-      const [profileRes, groupsRes] = await Promise.all([
-        fetch(`https://users.roblox.com/v1/users/${userId}`),
-        fetch(`https://groups.roblox.com/v1/users/${userId}/groups/roles`)
-      ]);
-
-      // handler of errors that can be caused by the roblxo api
+      const profileRes = await fetch(`https://users.roblox.com/v1/users/${userId}`);
       if (!profileRes.ok) {
         return new Response(JSON.stringify({ error: "Failed to fetch user profile" }), { status: profileRes.status });
       }
-      if (!groupsRes.ok) {
-        return new Response(JSON.stringify({ error: "Failed to fetch user groups" }), { status: groupsRes.status });
-      }
-
       const profile = await profileRes.json();
-      const groupsData = await groupsRes.json();
+      const promises = [];
+      const promiseKeys = [];
 
-      // group list
-      const groups = groupsData.data.map(g => ({
-        groupId: g.group.id,
-        groupName: g.group.name,
-        memberCount: g.group.memberCount,
-        roleId: g.role.id,
-        roleName: g.role.name,
-        rank: g.role.rank,
-        isPrimary: g.isPrimaryGroup
-      }));
-
-      let groupMatch = null;
-      if (groupId) {
-        groupMatch = groupsData.data.find(g => g.group.id === parseInt(groupId));
+      if (includeGroups) {
+        promises.push(fetch(`https://groups.roblox.com/v1/users/${userId}/groups/roles`));
+        promiseKeys.push('groups');
       }
+      if (includeAvatar) {
+        promises.push(fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`));
+        promiseKeys.push('avatar');
+      }
+      if (includePresence) {
+        promises.push(fetch(`https://presence.roblox.com/v1/presence/users`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userIds: [userId] })
+        }));
+        promiseKeys.push('presence');
+      }
+      if (includeFriendsCount) {
+        promises.push(fetch(`https://friends.roblox.com/v1/users/${userId}/friends/count`));
+        promiseKeys.push('friendsCount');
+      }
+      if (includeFollowersCount) {
+        promises.push(fetch(`https://friends.roblox.com/v1/users/${userId}/followers/count`));
+        promiseKeys.push('followersCount');
+      }
+      if (includeFollowingCount) {
+        promises.push(fetch(`https://friends.roblox.com/v1/users/${userId}/followings/count`));
+        promiseKeys.push('followingCount');
+      }
+      const results = await Promise.allSettled(promises);
+      let groupsData = null;
+      let avatarData = null;
+      let presenceData = null;
+      let friendsCountData = null;
+      let followersCountData = null;
+      let followingCountData = null;
 
-      // response
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          const key = promiseKeys[index];
+          result.value.json().then(data => {
+            switch(key) {
+              case 'groups': groupsData = data; break;
+              case 'avatar': avatarData = data; break;
+              case 'presence': presenceData = data; break;
+              case 'friendsCount': friendsCountData = data; break;
+              case 'followersCount': followersCountData = data; break;
+              case 'followingCount': followingCountData = data; break;
+            }
+          }).catch(() => {});
+        }
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
       const response = {
         id: profile.id,
         username: profile.name,
         displayName: profile.displayName,
         created: profile.created,
         profileUrl: `https://www.roblox.com/users/${profile.id}/profile`,
-        groups: groups,
-        requestedGroup: groupMatch ? {
-          groupId: groupMatch.group.id,
-          groupName: groupMatch.group.name,
-          roleId: groupMatch.role.id,
-          roleName: groupMatch.role.name,
-          rank: groupMatch.role.rank,
-          isPrimary: groupMatch.isPrimaryGroup
-        } : null
       };
-      // small thing i wanted to add but i dont think its rlly necessary anymore so nah
-      /*
-      const avatarRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=48x48&format=Png`);
-      if (avatarRes.ok) {
-        const avatarData = await avatarRes.json();
-        response.avatarUrl = avatarData.data?.[0]?.imageUrl || null;
+
+      if (profile.description) response.description = profile.description;
+
+      if (includeGroups && groupsData) {
+        response.groups = groupsData.data.map(g => ({
+          groupId: g.group.id,
+          groupName: g.group.name,
+          memberCount: g.group.memberCount,
+          roleId: g.role.id,
+          roleName: g.role.name,
+          rank: g.role.rank,
+          isPrimary: g.isPrimaryGroup
+        }));
+
+        if (groupId) {
+          const groupMatch = groupsData.data.find(g => g.group.id === parseInt(groupId));
+          response.requestedGroup = groupMatch ? {
+            groupId: groupMatch.group.id,
+            groupName: groupMatch.group.name,
+            roleId: groupMatch.role.id,
+            roleName: groupMatch.role.name,
+            rank: groupMatch.role.rank,
+            isPrimary: groupMatch.isPrimaryGroup
+          } : null;
+        }
       }
-      leaving this in so that yall can look
-      */
+
+      if (includeAvatar && avatarData && avatarData.data) {
+        response.avatarUrl = avatarData.data[0]?.imageUrl || null;
+      }
+
+      if (includePresence && presenceData && presenceData.userPresences) {
+        const presence = presenceData.userPresences[0];
+        response.presence = {
+          userPresenceType: presence.userPresenceType,
+          lastLocation: presence.lastLocation,
+          placeId: presence.placeId,
+          rootPlaceId: presence.rootPlaceId,
+          gameId: presence.gameId,
+          universeId: presence.universeId
+        };
+      }
+
+      if (includeFriendsCount && friendsCountData) {
+        response.friendsCount = friendsCountData.count;
+      }
+      if (includeFollowersCount && followersCountData) {
+        response.followersCount = followersCountData.count;
+      }
+      if (includeFollowingCount && followingCountData) {
+        response.followingCount = followingCountData.count;
+      }
+
       return new Response(JSON.stringify(response), { 
         headers: { "Content-Type": "application/json" } 
       });
