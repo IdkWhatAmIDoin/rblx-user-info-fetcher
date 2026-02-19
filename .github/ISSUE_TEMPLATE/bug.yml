@@ -16,6 +16,6 @@ body:
     attributes:
       label: how to reproduce
       description: how do i reproduce this issue bro 😼
-      placeholder: 1. type in "username": "ROBLOX" 2. send the api request 3. bug yay!!
+      placeholder: how do i do it bro tell me
     validations:
       required: true
