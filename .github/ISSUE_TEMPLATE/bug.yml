@@ -1,0 +1,21 @@
+name: Bug Report
+description: send a bug report for me to fix it
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: what happened
+      description: what did you expect to happen btw?
+      placeholder: what did you see
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: how to reproduce
+      description: how do i reproduce this issue bro 😼
+      placeholder: 1. type in "username": "ROBLOX" 2. send the api request 3. bug yay!!
+    validations:
+      required: true
