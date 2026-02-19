@@ -1,5 +1,5 @@
-# Roblox Group Fetcher
-thing i made that gets someone's stats in a group. you would never need this but its really just for me
+# rblx user info fetcher
+thing i made that gets someone's info. you would never need this but its really just for me
 
 # uh api thing
 the url is https://rbx-group-fetcher.dimasuperotovorot3000.workers.dev/ and this should be the body
@@ -12,6 +12,7 @@ or
   "userId": 1,
   "groupId": 1
 }``
+group id is optional
 the api should return something like this
 ``{
   "id": 1,
@@ -26,6 +27,7 @@ the api should return something like this
     "role": "Owner"
   }
 }``
+i wont update this example for a while so it will definitely differ
 
 # uh thats it
 bye
