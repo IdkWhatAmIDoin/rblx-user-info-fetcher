@@ -2,7 +2,7 @@
 thing i made that gets someone's stats in a group. you would never need this but its really just for me
 
 # uh api thing
-the url is rbx-group-fetcher.pages.dev and this should be the body
+the url is https://rbx-group-fetcher.dimasuperotovorot3000.workers.dev/ and this should be the body
 ``{
   "username": "ROBLOX",
   "groupId": 1
