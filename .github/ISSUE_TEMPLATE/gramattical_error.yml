@@ -1,0 +1,34 @@
+name: Grammatical Error
+description: Report a typo, spelling mistake, or grammar issue
+title: "[GRAMMAR]: "
+labels: ["documentation", "typo"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Where is the error? (file name or URL)
+      placeholder: e.g., README.md, line 12
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current text
+      description: What does it say now?
+      placeholder: Copy the incorrect text here
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction
+      description: What should it say instead?
+      placeholder: Your corrected version
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any other context or screenshots here.
