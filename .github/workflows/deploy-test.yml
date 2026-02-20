@@ -1,0 +1,21 @@
+name: Deploy to Test Worker
+
+on:
+  push:
+    branches:
+      - site-test   # only runs when you push to site-test
+  workflow_dispatch: # lets you trigger manually
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --name rblx-uif-sitetest
