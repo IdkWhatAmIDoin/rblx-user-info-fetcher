@@ -26,6 +26,15 @@ export default {
     if (request.method !== "POST") {
       return new Response(JSON.stringify({ error: "Check if you're not using POST." }), { status: 405 });
     }
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      });
+    }
 
     try {
       const body = await parseBody(request);
