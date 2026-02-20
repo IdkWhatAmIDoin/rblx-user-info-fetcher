@@ -1,5 +1,7 @@
 # Roblox User Info Fetcher
-![](https://img.shields.io/badge/currently-up-green)
+![]([https://img.shields.io/badge/currently-up-green](https://img.shields.io/uptimerobot/status/m802389550-7ffc850247cff37f1ea4e6f9?up_message=up&up_color=green&down_message=down%2C%20the%20error%20will%20be%20fixed%20soon&down_color=red&style=flat
+))
+
 This is a thing I made recently that combines some API's into one.
 
 # API
@@ -360,10 +362,55 @@ Response body:
 }
 ```
 </details>
-i wont update this example for a while so it will definitely differ
 
-# uh thats it
-bye
+## Optional variables
+
+* userId – Roblox user ID (optional if username is provided)
+
+* username – Roblox username (optional if userId is provided)
+
+* groupId – Filter the user's groups to check membership in a specific group; adds a requestedGroup field to the response
+
+* includeAvatar – Include the user's avatar headshot URL (default: false)
+
+* includePresence – Include the user's current presence (game, location, etc.) (default: false)
+
+* includeFriendsCount – Include the user's friend count (default: false)
+
+* includeFollowersCount – Include the user's follower count (default: false)
+
+* includeFollowingCount – Include the user's following count (default: false)
+
+* includeGroups – Include the user's group memberships (default: true)
+
+Example with all of them:
+
+```json
+{  
+  "username": "PapaAleks11",
+  "userId": 1478795848,
+  "groupId": 4914494,
+  "includeAvatar": true,
+  "includePresence": true,
+  "includeFriendsCount": true,
+  "includeFollowersCount": true,
+  "includeFollowingCount": true,
+  "includeGroups": true
+}
+```
+### Notes on boolean flags
+
+All "include*" flags accept the following truthy/falsy values:
+
+True: true, "true", "1", "on", any non-zero number
+
+False: false, "false", "0", "off", null, undefined
+
+# Rate-limits
+
+Please do not send too much requests, as I don't wanna get blocked by Roblox.
+
+Yeah we good on that one? Good.
 
 
 
