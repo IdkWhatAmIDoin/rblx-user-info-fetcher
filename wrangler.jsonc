@@ -1,7 +1,7 @@
 {
-  "name": "rbx-group-fetcher",
+  "name": "rblx-uif-sitetest",
   "main": "src/index.js",
-  "compatibility_date": "2026-02-19",
+  "compatibility_date": "2026-02-20",
   "observability": {
     "logs": {
       "enabled": true,
