@@ -1,5 +1,6 @@
 export default {
   async fetch(request) {
+    const userAgent = request.headers.get("User-Agent") || "";
     if (request.method === "GET") {
       const userAgent = request.headers.get("User-Agent") || "";
       if (isBrowser(userAgent)) {
