@@ -4,6 +4,15 @@ export default {
     if (url.pathname === "/health") {
       return new Response("OK", { status: 200 });
     }
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      });
+    }
     const userAgent = request.headers.get("User-Agent") || "";
     if (request.method === "GET") {
       const userAgent = request.headers.get("User-Agent") || "";
@@ -25,15 +34,6 @@ export default {
     }
     if (request.method !== "POST") {
       return new Response(JSON.stringify({ error: "Check if you're not using POST." }), { status: 405 });
-    }
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        },
-      });
     }
 
     try {
