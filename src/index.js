@@ -138,10 +138,12 @@ export default {
         },
       });
     }
+    const url = new URL(request.url);
     if (url.pathname === "/verify-challenge") {
-      if (request.method !== "POST") {
-        return new Response("Method not allowed", { status: 405 });
-      }
+        if (request.method !== "POST") {
+          return corsify(new Response("Method not allowed", { status: 405 }));
+        }
+    }
 
       try {
         const { token, returnUrl } = await request.json();
@@ -167,8 +169,6 @@ export default {
         return new Response('Invalid request', { status: 400 });
       }
     }
-
-    const url = new URL(request.url);
     const clientIP = request.headers.get("CF-Connecting-IP") || 
                      request.headers.get("X-Forwarded-For") || 
                      "unknown";
