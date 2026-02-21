@@ -154,10 +154,10 @@ export default {
         const outcome = await verifyResponse.json();
 
         if (outcome.success) {
-          const response = new Response(null, {
+          const response = corsify(new Response(null, {
             status: 302,
             headers: { 'Location': returnUrl || '/' }
-          });
+          }));
           response.headers.append('Set-Cookie', `cf_clearance=${crypto.randomUUID()}; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax`);
           return corsify(response);
         } else {
