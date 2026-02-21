@@ -44,16 +44,13 @@ function normalizeBoolean(value, defaultValue) {
   return defaultValue;
 }
 
-// Rate limiting constants
 const RATE_LIMIT = 50;
 const TIME_WINDOW = 60;
 const BAN_DURATION = 3600;
 
-// ----- NEW: IP Policy Functions -----
 async function getIpPolicy(env) {
   try {
-    const policyData = await env.IP_BANS.get('ip_policy', { type: 'json' });
-    // If policyData exists and has a 'bans' array, return it; otherwise return empty array
+    const policyData = await env.IP_BANS.get('ip_policy', { type: 'json' });y
     return (policyData && Array.isArray(policyData.bans)) ? policyData.bans : [];
   } catch (err) {
     console.error('Failed to fetch IP policy:', err);
@@ -64,14 +61,11 @@ async function getIpPolicy(env) {
 function checkIpAgainstPolicy(ip, bansArray) {
   for (const entry of bansArray) {
     if (entry.ip === ip) {
-      return entry; // Return the whole entry
+      return entry; 
     }
   }
   return null;
 }
-// ----------------------------------
-
-// ----- Existing rate limiter (unchanged) -----
 async function checkRateLimit(env, ip) {
   const key = `rate:${ip}`;
   const now = Math.floor(Date.now() / 1000);
@@ -135,7 +129,6 @@ async function checkRateLimit(env, ip) {
 
 export default {
   async fetch(request, env) {
-    // CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -145,13 +138,41 @@ export default {
         },
       });
     }
+    if (url.pathname === "/verify-challenge") {
+      if (request.method !== "POST") {
+        return new Response("Method not allowed", { status: 405 });
+      }
+
+      try {
+        const { token, returnUrl } = await request.json();
+        const secretKey = env.TURNSTILE_SECRET;
+        const verifyResponse = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `secret=${encodeURIComponent(secretKey)}&response=${encodeURIComponent(token)}`
+        });
+        const outcome = await verifyResponse.json();
+
+        if (outcome.success) {
+          const response = new Response(null, {
+            status: 302,
+            headers: { 'Location': returnUrl || '/' }
+          });
+          response.headers.append('Set-Cookie', `cf_clearance=${crypto.randomUUID()}; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax`);
+          return corsify(response);
+        } else {
+          return new Response('Verification failed', { status: 403 });
+        }
+      } catch (err) {
+        return new Response('Invalid request', { status: 400 });
+      }
+    }
 
     const url = new URL(request.url);
     const clientIP = request.headers.get("CF-Connecting-IP") || 
                      request.headers.get("X-Forwarded-For") || 
                      "unknown";
 
-    // ----- NEW: Policy check before rate limiting -----
     const bans = await getIpPolicy(env);
     const policyMatch = checkIpAgainstPolicy(clientIP, bans);
     
@@ -165,19 +186,15 @@ export default {
           ));
 
         case 'challenge':
-          // For now treat as block; you can later implement a CAPTCHA page
-          return corsify(new Response(JSON.stringify({
-            error: "Challenge required.",
-            reason: `IP requires challenge (risk: ${policyMatch.risk || 'unknown'})`,
-            action: action
-          }), { status: 401 }));
-
+          const returnUrl = encodeURIComponent(request.url);
+          return corsify(Response.redirect(
+            `https://rblx-uif-site.pages.dev/challenge?return=${returnUrl}`,
+            302
+          ));
         case 'allow':
-          // Whitelisted – skip all further checks, proceed to API
-          break; // continue below
+          break;
 
         default:
-          // Unknown action – block to be safe
           return corsify(new Response(JSON.stringify({
             error: "Access denied (unknown policy action).",
             reason: `IP matched policy with unknown action: ${action}`,
@@ -185,9 +202,6 @@ export default {
           }), { status: 403 }));
       }
     }
-    // ------------------------------------------------
-
-    // Rate limiting (skip for health and docs paths)
     if (url.pathname !== "/health" && !url.pathname.startsWith("/docs/")) {
       const rateCheck = await checkRateLimit(env, clientIP);
       if (!rateCheck.allowed) {
@@ -196,13 +210,9 @@ export default {
           302
         ));
       }
-
-    // Health check
     if (url.pathname === "/health") {
       return corsify(new Response("OK", { status: 200 }));
     }
-
-    // Browser GET redirect
     if (request.method === "GET") {
       const userAgent = request.headers.get("User-Agent") || "";
       if (isBrowser(userAgent)) {
@@ -211,8 +221,6 @@ export default {
     }
 
     const userAgent = request.headers.get("User-Agent") || "";
-
-    // Geometry Dash easter egg
     if (userAgent.toLowerCase().includes("geometrydash")) {
       return corsify(new Response(
         JSON.stringify({
@@ -221,16 +229,12 @@ export default {
         { status: 200, headers: { "Content-Type": "application/json" } }
       ));
     }
-
-    // Only POST allowed for API
     if (request.method !== "POST") {
       return corsify(new Response(
         JSON.stringify({ error: "Check if you're not using POST." }),
         { status: 405, headers: { "Content-Type": "application/json" } }
       ));
     }
-
-    // Main API logic
     try {
       const body = await parseBody(request);
       let userId = body.userId;
