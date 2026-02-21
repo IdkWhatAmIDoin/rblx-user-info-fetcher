@@ -161,10 +161,10 @@ export default {
           response.headers.append('Set-Cookie', `cf_clearance=${crypto.randomUUID()}; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax`);
           return corsify(response);
         } else {
-          return new Response('Verification failed', { status: 403 });
+          return corsify(new Response('Verification failed', { status: 403 }));
         }
       } catch (err) {
-        return new Response('Invalid request', { status: 400 });
+        return corsify(new Response('Invalid request', { status: 400 }));
       }
     }
     const clientIP = request.headers.get("CF-Connecting-IP") || 
