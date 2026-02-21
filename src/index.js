@@ -159,11 +159,10 @@ export default {
       const action = policyMatch.action || 'block';
       switch (action) {
         case 'block':
-          return corsify(new Response(JSON.stringify({
-            error: "Access denied due to security policy.",
-            reason: `IP matched policy (risk: ${policyMatch.risk || 'unknown'})`,
-            action: action
-          }), { status: 403 }));
+          return corsify(Response.redirect(
+            'https://rblx-uif-site.pages.dev/blocked?type=permanent',
+            302
+          ));
 
         case 'challenge':
           // For now treat as block; you can later implement a CAPTCHA page
@@ -192,20 +191,11 @@ export default {
     if (url.pathname !== "/health" && !url.pathname.startsWith("/docs/")) {
       const rateCheck = await checkRateLimit(env, clientIP);
       if (!rateCheck.allowed) {
-        const response = new Response(JSON.stringify({
-          error: "Rate limit exceeded. You have been temporarily banned.",
-          retry_after: rateCheck.retryAfter,
-          reason: rateCheck.reason
-        }), {
-          status: 429,
-          headers: {
-            "Content-Type": "application/json",
-            "Retry-After": rateCheck.retryAfter.toString()
-          }
-        });
-        return corsify(response);
+        return corsify(Response.redirect(
+          'https://rblx-uif-site.pages.dev/blocked?type=temporary',
+          302
+        ));
       }
-    }
 
     // Health check
     if (url.pathname === "/health") {
