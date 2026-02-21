@@ -210,6 +210,7 @@ export default {
           302
         ));
       }
+    }
     if (url.pathname === "/health") {
       return corsify(new Response("OK", { status: 200 }));
     }
