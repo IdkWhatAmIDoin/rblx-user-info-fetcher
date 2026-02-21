@@ -153,6 +153,8 @@ export default {
         });
         const outcome = await verifyResponse.json();
 
+        console.log('Turnstile outcome:', JSON.stringify(outcome));
+        
         if (outcome.success) {
           const response = corsify(new Response(null, {
             status: 302,
