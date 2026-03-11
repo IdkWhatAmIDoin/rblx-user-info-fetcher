@@ -277,7 +277,7 @@ export default {
       const includeGroups = normalizeBoolean(body.includeGroups, true);
 
       if (!userId && username) {
-        const userRes = await fetch("https://users.roblox.com/v1/usernames/users", {
+        const userRes = await fetch("https://users.roproxy.com/v1/usernames/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
@@ -300,7 +300,7 @@ export default {
         ));
       }
 
-      const profileRes = await fetch(`https://users.roblox.com/v1/users/${userId}`);
+      const profileRes = await fetch(`https://users.roproxy.com/v1/users/${userId}`);
       if (!profileRes.ok) {
         return corsify(new Response(
           JSON.stringify({ error: "Failed to fetch user profile" }),
@@ -313,15 +313,15 @@ export default {
       const promiseKeys = [];
 
       if (includeGroups) {
-        promises.push(fetch(`https://groups.roblox.com/v1/users/${userId}/groups/roles`));
+        promises.push(fetch(`https://groups.roproxy.com/v1/users/${userId}/groups/roles`));
         promiseKeys.push('groups');
       }
       if (includeAvatar) {
-        promises.push(fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`));
+        promises.push(fetch(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`));
         promiseKeys.push('avatar');
       }
       if (includePresence) {
-        promises.push(fetch(`https://presence.roblox.com/v1/presence/users`, {
+        promises.push(fetch(`https://presence.roproxy.com/v1/presence/users`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userIds: [userId] })
@@ -329,15 +329,15 @@ export default {
         promiseKeys.push('presence');
       }
       if (includeFriendsCount) {
-        promises.push(fetch(`https://friends.roblox.com/v1/users/${userId}/friends/count`));
+        promises.push(fetch(`https://friends.roproxy.com/v1/users/${userId}/friends/count`));
         promiseKeys.push('friendsCount');
       }
       if (includeFollowersCount) {
-        promises.push(fetch(`https://friends.roblox.com/v1/users/${userId}/followers/count`));
+        promises.push(fetch(`https://friends.roproxy.com/v1/users/${userId}/followers/count`));
         promiseKeys.push('followersCount');
       }
       if (includeFollowingCount) {
-        promises.push(fetch(`https://friends.roblox.com/v1/users/${userId}/followings/count`));
+        promises.push(fetch(`https://friends.roproxy.com/v1/users/${userId}/followings/count`));
         promiseKeys.push('followingCount');
       }
 
@@ -367,7 +367,7 @@ export default {
         username: profile.name,
         displayName: profile.displayName,
         created: profile.created,
-        profileUrl: `https://www.roblox.com/users/${profile.id}/profile`,
+        profileUrl: `https://www.roproxy.com/users/${profile.id}/profile`,
       };
 
       if (profile.description) response.description = profile.description;
