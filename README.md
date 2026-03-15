@@ -26,7 +26,7 @@ Response body:
 	"username": "PapaAleks11",
 	"displayName": "Dima",
 	"created": "2020-02-27T07:16:28.267Z",
-	"profileUrl": "https://www.roblox.com/users/1478795848/profile",
+	"profileUrl": "https://www.roproxy.com/users/1478795848/profile",
 	"description": "oh hi!",
 	"groups": [
 		{
@@ -398,18 +398,19 @@ Example with all of them:
   "includeGroups": true
 }
 ```
+
 ### Notes on boolean flags
 
 All "include*" flags accept the following truthy/falsy values:
 
-True: true, "true", "1", "on", any non-zero number
+True: `true`, `"true"`, `"1"`, `"on"`, any non-zero number
 
-False: false, "false", "0", "off", null, undefined
+False: `false`, `"false"`, `"0"`, `"off"`, `null`, `undefined`
+
+Passing anything else (e.g. an array or object) will return a `400` error.
 
 # Rate-limits
 
-Please do not send too much requests, as I don't wanna get blocked by Roblox.
+50 requests per 60 seconds per IP. Exceeding this will get you banned for 1 hour.
 
-Yeah we good on that one? Good.
-
-
+Please don't abuse it, I don't wanna get blocked by Roblox. yeah we good on that one? good.
