@@ -208,6 +208,10 @@ async function isClearanceValid(env, token) {
 
 // ─── main handler ──────────────────────────────────────────────────────────────
 
+// tldr. cant even read my code lol.
+
+
+
 export default {
   async fetch(request, env) {
 
@@ -223,6 +227,8 @@ export default {
     }
 
     const url = new URL(request.url);
+    
+    console.log('dima is cool '); // dima signature
 
     // ── /verify-challenge ────────────────────────────────────────────────────
     if (url.pathname === "/verify-challenge") {
@@ -297,6 +303,20 @@ export default {
       } catch (err) {
         return corsify(new Response('Invalid request', { status: 400 }));
       }
+    }
+
+    // ── /418 ────────────────────────────────────────────────────
+    if (url.pathname === "/418") {
+      if (request.method !== "GET") {
+        return corsify(new Response("i know we usually use post and stuff, but this time its only get", { status: 405 }));
+      }
+      return corsify(new Response(
+        JSON.stringify({
+          uhhh: "well,,,. im not rlly a teapot, but have this image of a teapot i guess??",
+          image: "https://http.cat/418"
+        }),
+        { status: 418, statusText: "cat in a teapot", headers: { "Content-Type": "application/json" } }
+      ));
     }
 
     // ── ip / rate limiting ───────────────────────────────────────────────────

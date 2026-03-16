@@ -1,0 +1,25 @@
+# Claude Code / CLI
+.claude/
+CLAUDE.md
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Cloudflare Workers (Wrangler)
+.wrangler/
+dist/
+.dev.vars
+
+# Environment / Secrets
+.env
+*.pem
+
+# System / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local Git
+.git/
