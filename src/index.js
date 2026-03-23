@@ -54,17 +54,13 @@ function normalizeBoolean(value, defaultValue) {
     if (lower === 'false' || lower === '0' || lower === 'off') return false;
   }
   if (typeof value === 'number') return value !== 0;
-  // FIX: arrays/objects now throw instead of silently falling back to defaultValue
   throw new Error(`Invalid boolean value for parameter: ${JSON.stringify(value)}`);
 }
 
 // ─── input validation ──────────────────────────────────────────────────────────
-// FIX: userId and groupId are now validated and coerced to safe integers before use.
 
 function sanitizeRobloxId(value, fieldName) {
   if (value === undefined || value === null) return null;
-  // FIX: explicitly reject scientific notation strings like "1e5" since
-  // parseInt("1e5", 10) === 1, not 100000, which silently truncates the value.
   if (typeof value === 'string' && /[eE]/.test(value)) {
     throw new Error(`Invalid ${fieldName}: scientific notation is not allowed, got "${value}"`);
   }
@@ -75,22 +71,123 @@ function sanitizeRobloxId(value, fieldName) {
   return n;
 }
 
+// ─── KV cache helpers ──────────────────────────────────────────────────────────
+
+// TTLs in seconds
+const CACHE_TTL = {
+  profile:        600,  // 10 min
+  groups:         300,  // 5 min
+  avatar:         600,  // 10 min
+  presence:        30,  // 30 sec
+  friendsCount:   300,  // 5 min
+  followersCount: 300,
+  followingCount: 300,
+  cool:           300,  // 5 min (ai decisions cached so we dont spam gemini)
+};
+
+async function kvGet(env, key) {
+  try {
+    const raw = await env.IP_BANS.get(`cache:${key}`, { type: 'json' });
+    if (!raw) return null;
+    if (Date.now() > raw.expiresAt) return null; // expired
+    return raw.value;
+  } catch {
+    return null;
+  }
+}
+
+async function kvSet(env, key, value, ttlSeconds) {
+  try {
+    await env.IP_BANS.put(`cache:${key}`, JSON.stringify({
+      value,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    }), { expirationTtl: ttlSeconds + 10 });
+  } catch (e) {
+    console.error('cache write failed:', e);
+  }
+}
+
+// ─── cool or not ──────────────────────────────────────────────────────────────
+
+// hardcoded verdicts — these are final, no ai needed
+const HARDCODED_COOL = {
+  papaleks11:  { cool: true,  reason: "site owner. obviously cool." },
+  roblox:      { cool: false, reason: "corporate account. not cool." },
+  builderman:  { cool: true,  reason: "classic roblox icon. respect." },
+  john_doe:    { cool: false, reason: "creepypasta. not cool." },
+  jane_doe:    { cool: false, reason: "creepypasta. also not cool." },
+};
+
+async function decideCool(env, username, displayName, description, groups) {
+  const lower = (username || '').toLowerCase();
+
+  // 1. hardcoded
+  if (HARDCODED_COOL[lower]) return HARDCODED_COOL[lower];
+
+  // 2. check cache so we dont call gemini every time
+  const cacheKey = `cool:${lower}`;
+  const cached = await kvGet(env, cacheKey);
+  if (cached) return cached;
+
+  // 3. try gemini
+  if (env.gemini_api_key) {
+    try {
+      const groupSample = (groups || []).slice(0, 5).map(g => g.groupName).join(', ') || 'none';
+      const prompt = `You are deciding if a Roblox user is "cool" or "not cool" for a fun personal website feature. Be playful and brief.
+Username: ${username}
+Display name: ${displayName}
+Bio: ${description || 'none'}
+Groups (sample): ${groupSample}
+Respond ONLY with valid JSON in this exact format, nothing else:
+{"cool": true, "reason": "one short funny sentence"}
+or
+{"cool": false, "reason": "one short funny sentence"}`;
+
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-latest:generateContent?key=${env.gemini_api_key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: 60, temperature: 1.0 },
+          }),
+        }
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const clean = text.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(clean);
+        if (typeof parsed.cool === 'boolean' && typeof parsed.reason === 'string') {
+          await kvSet(env, cacheKey, parsed, CACHE_TTL.cool);
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error('gemini cool check failed:', e);
+    }
+  }
+
+  // 4. random fallback
+  const cool = Math.random() > 0.5;
+  const result = {
+    cool,
+    reason: cool ? "vibes check passed (randomly)" : "vibes check failed (randomly)",
+  };
+  await kvSet(env, cacheKey, result, CACHE_TTL.cool);
+  return result;
+}
+
 // ─── rate limiting ─────────────────────────────────────────────────────────────
 
 const RATE_LIMIT = 50;
 const TIME_WINDOW = 60;
 const BAN_DURATION = 3600;
 
-// in-memory rate limit cache — cloudflare reuses worker isolates within the same
-// datacenter, so this map persists across requests on the same isolate. this cuts
-// KV writes from "every request" down to "only on first-seen, ban, or window reset",
-// which is critical on the free tier (1,000 KV writes/day limit).
-// structure: ip → { count, windowStart, banned, banExpiry }
 const rateLimitCache = new Map();
 
-// in-memory ip policy cache — avoids a KV read on every single request.
-// the policy list changes rarely, so 30s staleness is fine.
-// structure: { bans: [...], fetchedAt: unixSeconds }
 let ipPolicyCache = null;
 const IP_POLICY_CACHE_TTL = 30;
 
@@ -106,8 +203,6 @@ async function getIpPolicy(env) {
     return bans;
   } catch (err) {
     console.error('Failed to fetch IP policy:', err);
-    // return stale cache if available rather than an empty list, so a KV blip
-    // doesn't suddenly un-ban everyone
     return ipPolicyCache ? ipPolicyCache.bans : [];
   }
 }
@@ -123,22 +218,16 @@ async function checkRateLimit(env, ip) {
   const key = `rate:${ip}`;
   const now = Math.floor(Date.now() / 1000);
   try {
-    // check in-memory cache first — avoids a KV read on every request
     let data = rateLimitCache.get(ip);
 
     if (!data) {
-      // not in memory — check KV in case this isolate is fresh or the ip was
-      // banned by a different isolate/datacenter
       const kvData = await env.IP_BANS.get(key, { type: 'json' });
       if (kvData) {
         data = kvData;
         rateLimitCache.set(ip, data);
       } else {
-        // first ever request from this ip
         data = { count: 1, windowStart: now, banned: false, banExpiry: 0 };
         rateLimitCache.set(ip, data);
-        // write to KV so other isolates know about this ip
-        // TTL: just long enough to cover the window
         await env.IP_BANS.put(key, JSON.stringify(data), { expirationTtl: TIME_WINDOW + 5 });
         return { allowed: true, data };
       }
@@ -148,7 +237,6 @@ async function checkRateLimit(env, ip) {
       if (now < data.banExpiry) {
         return { allowed: false, reason: 'banned', retryAfter: data.banExpiry - now };
       }
-      // ban expired — reset
       data = { count: 1, windowStart: now, banned: false, banExpiry: 0 };
       rateLimitCache.set(ip, data);
       await env.IP_BANS.put(key, JSON.stringify(data), { expirationTtl: TIME_WINDOW + 5 });
@@ -156,14 +244,12 @@ async function checkRateLimit(env, ip) {
     }
 
     if (now - data.windowStart > TIME_WINDOW) {
-      // window rolled over — reset counter, write to KV to sync other isolates
       data = { count: 1, windowStart: now, banned: false, banExpiry: 0 };
       rateLimitCache.set(ip, data);
       await env.IP_BANS.put(key, JSON.stringify(data), { expirationTtl: TIME_WINDOW + 5 });
       return { allowed: true, data };
     }
 
-    // still within window — increment in memory only, no KV write needed
     data.count++;
     rateLimitCache.set(ip, data);
 
@@ -171,7 +257,6 @@ async function checkRateLimit(env, ip) {
       data.banned = true;
       data.banExpiry = now + BAN_DURATION;
       rateLimitCache.set(ip, data);
-      // ban must be written to KV so other isolates enforce it too
       await env.IP_BANS.put(key, JSON.stringify(data), { expirationTtl: BAN_DURATION });
       return { allowed: false, reason: 'rate_limit_exceeded', retryAfter: BAN_DURATION };
     }
@@ -179,17 +264,12 @@ async function checkRateLimit(env, ip) {
     return { allowed: true, data };
   } catch (error) {
     console.error('Rate limit check failed:', error);
-    // fail open, but log it — if KV is broken we can't enforce bans anyway
     return { allowed: true, data: null };
   }
 }
 
 // ─── clearance cookie helper ───────────────────────────────────────────────────
 
-// FIX: extracted cookie reading into a helper so it can be used in the main handler.
-// previously the clearance token was written to KV but never read anywhere — the
-// entire challenge system was a no-op. this function reads the cf_clearance cookie
-// and verifies it against KV.
 function getClearanceCookie(request) {
   const cookieHeader = request.headers.get('Cookie') || '';
   const match = cookieHeader.match(/(?:^|;\s*)cf_clearance=([^;]+)/);
@@ -209,8 +289,6 @@ async function isClearanceValid(env, token) {
 // ─── main handler ──────────────────────────────────────────────────────────────
 
 // tldr. cant even read my code lol.
-
-
 
 export default {
   async fetch(request, env) {
@@ -236,8 +314,6 @@ export default {
         return corsify(new Response("Method not allowed", { status: 405 }));
       }
 
-      // FIX: /verify-challenge was handled before rate limiting ran, meaning it
-      // was completely unprotected. check rate limit here explicitly.
       const challengeIP =
         request.headers.get("CF-Connecting-IP") ||
         request.headers.get("X-Forwarded-For") ||
@@ -256,7 +332,6 @@ export default {
       try {
         const { token, returnUrl } = await request.json();
 
-        // FIX: validate returnUrl is same-origin to prevent open redirect
         if (returnUrl) {
           let parsed;
           try {
@@ -321,9 +396,6 @@ export default {
 
     // ── ip / rate limiting ───────────────────────────────────────────────────
 
-    // FIX: reject requests with no resolvable IP instead of bucketing them all
-    // under "unknown" in KV. in a deployed cloudflare worker CF-Connecting-IP is
-    // always injected, so its absence is a strong signal something is wrong.
     const clientIP =
       request.headers.get("CF-Connecting-IP") ||
       request.headers.get("X-Forwarded-For") ||
@@ -344,16 +416,12 @@ export default {
       if (action === 'block') {
         return corsify(Response.redirect('https://rblx-uif-site.pages.dev/blocked?type=permanent', 302));
       } else if (action === 'challenge') {
-        // FIX: before redirecting to the challenge page, check if the client already
-        // has a valid clearance cookie. if they do, let them through — otherwise the
-        // challenge loop is infinite for clients that have already completed it.
         const clearanceToken = getClearanceCookie(request);
         const cleared = await isClearanceValid(env, clearanceToken);
         if (!cleared) {
           const returnUrl = encodeURIComponent(request.url);
           return corsify(Response.redirect(`https://rblx-uif-site.pages.dev/challenge?return=${returnUrl}`, 302));
         }
-        // valid clearance — fall through to normal handling
       } else if (action === 'allow') {
         // explicitly allowed, fall through
       } else {
@@ -385,9 +453,6 @@ export default {
       }
     }
 
-    // FIX: method guard moved before the geometry dash easter egg check.
-    // previously a GD client sending DELETE/PUT/etc would get the funny json
-    // instead of a proper 405.
     if (request.method !== "POST") {
       return corsify(new Response(
         JSON.stringify({ error: "Check if you're not using POST." }),
@@ -410,14 +475,12 @@ export default {
     try {
       const body = await parseBody(request);
 
-      // FIX: userId and groupId are sanitized to safe positive integers
       let userId = sanitizeRobloxId(body.userId, 'userId');
       const groupId = sanitizeRobloxId(body.groupId, 'groupId');
       const username = typeof body.username === 'string' ? body.username.trim() : null;
 
-      // FIX: normalizeBoolean now throws on invalid input, wrapped in try/catch
       let includeAvatar, includePresence, includeFriendsCount,
-          includeFollowersCount, includeFollowingCount, includeGroups;
+          includeFollowersCount, includeFollowingCount, includeGroups, includeCool;
       try {
         includeAvatar          = normalizeBoolean(body.includeAvatar, false);
         includePresence        = normalizeBoolean(body.includePresence, false);
@@ -425,6 +488,7 @@ export default {
         includeFollowersCount  = normalizeBoolean(body.includeFollowersCount, false);
         includeFollowingCount  = normalizeBoolean(body.includeFollowingCount, false);
         includeGroups          = normalizeBoolean(body.includeGroups, true);
+        includeCool            = normalizeBoolean(body.includeCool, false);
       } catch (boolErr) {
         return corsify(new Response(
           JSON.stringify({ error: boolErr.message }),
@@ -434,34 +498,42 @@ export default {
 
       // resolve username → userId
       if (!userId && username) {
-        const userRes = await fetch("https://users.roproxy.com/v1/usernames/users", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
-        });
-        const userData = await userRes.json();
-        if (!userRes.ok) {
-          return corsify(new Response(
-            JSON.stringify({
-              error: "Failed to fetch username lookup",
-              apiStatusCode: userRes.status,
-              requestedUsername: username,
-              apiResponse: userData
-            }),
-            { status: userRes.status, headers: { "Content-Type": "application/json" } }
-          ));
-        }
-        if (userData.data && userData.data.length > 0) {
-          userId = userData.data[0].id;
+        // cache username → userId lookups too
+        const userIdCacheKey = `userid:${username.toLowerCase()}`;
+        const cachedUserId = await kvGet(env, userIdCacheKey);
+        if (cachedUserId) {
+          userId = cachedUserId;
         } else {
-          return corsify(new Response(
-            JSON.stringify({
-              error: "User not found",
-              requestedUsername: username,
-              apiResponse: userData
-            }),
-            { status: 404, headers: { "Content-Type": "application/json" } }
-          ));
+          const userRes = await fetch("https://users.roproxy.com/v1/usernames/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
+          });
+          const userData = await userRes.json();
+          if (!userRes.ok) {
+            return corsify(new Response(
+              JSON.stringify({
+                error: "Failed to fetch username lookup",
+                apiStatusCode: userRes.status,
+                requestedUsername: username,
+                apiResponse: userData
+              }),
+              { status: userRes.status, headers: { "Content-Type": "application/json" } }
+            ));
+          }
+          if (userData.data && userData.data.length > 0) {
+            userId = userData.data[0].id;
+            await kvSet(env, userIdCacheKey, userId, CACHE_TTL.profile);
+          } else {
+            return corsify(new Response(
+              JSON.stringify({
+                error: "User not found",
+                requestedUsername: username,
+                apiResponse: userData
+              }),
+              { status: 404, headers: { "Content-Type": "application/json" } }
+            ));
+          }
         }
       }
 
@@ -472,85 +544,95 @@ export default {
         ));
       }
 
-      const profileRes = await fetch(`https://users.roproxy.com/v1/users/${userId}`);
-      if (!profileRes.ok) {
+      // ── cached fetches ───────────────────────────────────────────────────
+      async function cachedFetch(cacheKey, ttl, fetchFn) {
+        const cached = await kvGet(env, cacheKey);
+        if (cached !== null) return cached;
+        const result = await fetchFn();
+        if (result !== null) await kvSet(env, cacheKey, result, ttl);
+        return result;
+      }
+
+      // profile (always fetched)
+      const profile = await cachedFetch(`profile:${userId}`, CACHE_TTL.profile, async () => {
+        const res = await fetch(`https://users.roproxy.com/v1/users/${userId}`);
+        if (!res.ok) return null;
+        return await res.json();
+      });
+
+      if (!profile) {
         return corsify(new Response(
           JSON.stringify({ error: "Failed to fetch user profile" }),
-          { status: profileRes.status, headers: { "Content-Type": "application/json" } }
+          { status: 502, headers: { "Content-Type": "application/json" } }
         ));
       }
-      const profile = await profileRes.json();
 
-      // build parallel fetch list
+      // build parallel fetch list with caching
       const promises = [];
       const promiseKeys = [];
 
       if (includeGroups) {
-        promises.push(fetch(`https://groups.roproxy.com/v1/users/${userId}/groups/roles`));
+        promises.push(cachedFetch(`groups:${userId}`, CACHE_TTL.groups, async () => {
+          const res = await fetch(`https://groups.roproxy.com/v1/users/${userId}/groups/roles`);
+          return res.ok ? await res.json() : null;
+        }));
         promiseKeys.push('groups');
       }
       if (includeAvatar) {
-        promises.push(fetch(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`));
+        promises.push(cachedFetch(`avatar:${userId}`, CACHE_TTL.avatar, async () => {
+          const res = await fetch(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`);
+          return res.ok ? await res.json() : null;
+        }));
         promiseKeys.push('avatar');
       }
       if (includePresence) {
-        promises.push(fetch(`https://presence.roproxy.com/v1/presence/users`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userIds: [userId] })
+        promises.push(cachedFetch(`presence:${userId}`, CACHE_TTL.presence, async () => {
+          const res = await fetch(`https://presence.roproxy.com/v1/presence/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userIds: [userId] })
+          });
+          return res.ok ? await res.json() : null;
         }));
         promiseKeys.push('presence');
       }
       if (includeFriendsCount) {
-        promises.push(fetch(`https://friends.roproxy.com/v1/users/${userId}/friends/count`));
+        promises.push(cachedFetch(`friendsCount:${userId}`, CACHE_TTL.friendsCount, async () => {
+          const res = await fetch(`https://friends.roproxy.com/v1/users/${userId}/friends/count`);
+          return res.ok ? await res.json() : null;
+        }));
         promiseKeys.push('friendsCount');
       }
       if (includeFollowersCount) {
-        promises.push(fetch(`https://friends.roproxy.com/v1/users/${userId}/followers/count`));
+        promises.push(cachedFetch(`followersCount:${userId}`, CACHE_TTL.followersCount, async () => {
+          const res = await fetch(`https://friends.roproxy.com/v1/users/${userId}/followers/count`);
+          return res.ok ? await res.json() : null;
+        }));
         promiseKeys.push('followersCount');
       }
       if (includeFollowingCount) {
-        promises.push(fetch(`https://friends.roproxy.com/v1/users/${userId}/followings/count`));
+        promises.push(cachedFetch(`followingCount:${userId}`, CACHE_TTL.followingCount, async () => {
+          const res = await fetch(`https://friends.roproxy.com/v1/users/${userId}/followings/count`);
+          return res.ok ? await res.json() : null;
+        }));
         promiseKeys.push('followingCount');
       }
 
-      const rawResults = await Promise.allSettled(promises);
-
-      const jsonResults = await Promise.all(
-        rawResults.map(async (result, index) => {
-          if (result.status === 'fulfilled') {
-            try {
-              const data = await result.value.json();
-              return { key: promiseKeys[index], data };
-            } catch {
-              // FIX: cancel body stream on fulfilled-but-unparseable responses to
-              // avoid holding open readable streams that weren't previously cleaned up.
-              // the rejected-fetch cancel below only covered network failures, not
-              // cases where the fetch succeeded but the body was malformed json.
-              try { result.value?.body?.cancel(); } catch {}
-              return null;
-            }
-          } else {
-            // FIX: cancel unread response bodies from rejected fetches to avoid
-            // memory pressure from unconsumed streams in the worker
-            try { result.value?.body?.cancel(); } catch {}
-            return null;
-          }
-        })
-      );
+      const results = await Promise.all(promises);
 
       let groupsData = null, avatarData = null, presenceData = null;
       let friendsCountData = null, followersCountData = null, followingCountData = null;
 
-      for (const item of jsonResults) {
-        if (!item) continue;
-        switch (item.key) {
-          case 'groups':        groupsData        = item.data; break;
-          case 'avatar':        avatarData        = item.data; break;
-          case 'presence':      presenceData      = item.data; break;
-          case 'friendsCount':  friendsCountData  = item.data; break;
-          case 'followersCount':followersCountData = item.data; break;
-          case 'followingCount':followingCountData = item.data; break;
+      for (let i = 0; i < promiseKeys.length; i++) {
+        const key = promiseKeys[i];
+        const data = results[i];
+        switch (key) {
+          case 'groups':         groupsData         = data; break;
+          case 'avatar':         avatarData         = data; break;
+          case 'presence':       presenceData       = data; break;
+          case 'friendsCount':   friendsCountData   = data; break;
+          case 'followersCount': followersCountData = data; break;
+          case 'followingCount': followingCountData = data; break;
         }
       }
 
@@ -591,7 +673,6 @@ export default {
         response.avatarUrl = avatarData.data[0]?.imageUrl || null;
       }
 
-      // FIX: guard against empty userPresences array before accessing [0]
       if (includePresence && presenceData?.userPresences?.length > 0) {
         const presence = presenceData.userPresences[0];
         response.presence = {
@@ -614,14 +695,23 @@ export default {
         response.followingCount = followingCountData.count;
       }
 
+      // ── cool or not ──────────────────────────────────────────────────────
+      if (includeCool) {
+        const coolResult = await decideCool(
+          env,
+          profile.name,
+          profile.displayName,
+          profile.description,
+          response.groups || []
+        );
+        response.cool = coolResult;
+      }
+
       return corsify(new Response(JSON.stringify(response), {
         headers: { "Content-Type": "application/json" }
       }));
 
     } catch (err) {
-      // FIX: previously this returned 400 for everything, including upstream failures
-      // which are clearly not the caller's fault. now distinguishes client errors
-      // (validation, bad input) from server/upstream errors.
       const isClientError = err instanceof SyntaxError || err.message?.includes('Invalid ') || err.message?.includes('Unsupported content type');
       return corsify(new Response(JSON.stringify({ error: "Worker Error", detail: err.message }), {
         status: isClientError ? 400 : 502,
