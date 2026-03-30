@@ -1,0 +1,44 @@
+name: Unban Request
+description: got banned? fill this out
+title: "[UNBAN]: "
+labels: ["unban"]
+body:
+  - type: input
+    id: ip
+    attributes:
+      label: your ip address
+      description: what's your ip? don't worry, an ip can only be used to find out your general location (check whatismyipaddress.com)
+      placeholder: "1.2.3.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ban-type
+    attributes:
+      label: ban type
+      description: what page did you get redirected to
+      options:
+        - temporary (hit rate limit)
+        - permanent
+        - i don't know
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: what were you doing
+      description: what were you doing when you got banned? were you actually spamming or did it seem like a mistake
+      placeholder: explain yourself lol, im not the one who got banned
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: acknowledgement
+      options:
+         - label: i was not abusing the api and this seems like a mistake
+           required: true
+         - label: i understand that if i was abusing the api, this request will be closed and ignored
+           required: true
