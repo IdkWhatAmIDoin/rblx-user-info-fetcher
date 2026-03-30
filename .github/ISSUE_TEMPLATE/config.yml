@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: api documentation
+    url: "https://rblx-uif-site.pages.dev/docs/home"
+    about: read the docs before opening an issue lol
+  - name: rate limit info
+    url: "https://github.com/IdkWhatAmIDoin/rblx-user-info-fetcher#rate-limits"
+    about: 50 req/60s per ip, exceeding it gets you banned for an hour
