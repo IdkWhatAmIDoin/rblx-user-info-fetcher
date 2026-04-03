@@ -15,6 +15,17 @@ function corsify(response) {
   });
 }
 
+function errorResponse(message, status, code, extra = {}) {
+  return corsify(new Response(JSON.stringify({
+    error: message,
+    code,
+    ...extra,
+  }), {
+    status,
+    headers: { "Content-Type": "application/json" }
+  }));
+}
+
 // ─── user-agent check ──────────────────────────────────────────────────────────
 
 function isBrowser(userAgent) {
@@ -85,6 +96,8 @@ const CACHE_TTL = {
   cool:           300,  // 5 min (ai decisions cached so we dont spam gemini)
 };
 
+const UPSTREAM_TIMEOUT_MS = 5000;
+
 async function kvGet(env, key) {
   try {
     const raw = await env.IP_BANS.get(`cache:${key}`, { type: 'json' });
@@ -101,9 +114,44 @@ async function kvSet(env, key, value, ttlSeconds) {
     await env.IP_BANS.put(`cache:${key}`, JSON.stringify({
       value,
       expiresAt: Date.now() + ttlSeconds * 1000,
-    }), { expirationTtl: ttlSeconds + 10 });
+    }), { expirationTtl: Math.max(ttlSeconds + 10, 60) });
   } catch (e) {
     console.error('cache write failed:', e);
+  }
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort('upstream timeout'), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchJsonOrNull(url, options) {
+  let res;
+  try {
+    res = await fetchWithTimeout(url, options);
+  } catch (err) {
+    throw err;
+  }
+
+  if (!res.ok) {
+    try { res?.body?.cancel(); } catch {}
+    return null;
+  }
+
+  try {
+    return await res.json();
+  } catch (err) {
+    try { res?.body?.cancel(); } catch {}
+    throw err;
   }
 }
 
@@ -214,6 +262,30 @@ function checkIpAgainstPolicy(ip, bansArray) {
   return null;
 }
 
+function getClientIp(request) {
+  const url = new URL(request.url);
+  const cfIp = request.headers.get('CF-Connecting-IP');
+  if (cfIp) return cfIp;
+
+  // allow localhost testing without weakening deployed traffic.
+  const isLocalhost =
+    url.hostname === 'localhost' ||
+    url.hostname === '127.0.0.1' ||
+    url.hostname === '::1';
+
+  if (isLocalhost) {
+    return request.headers.get('X-Forwarded-For') || '127.0.0.1';
+  }
+
+  return null;
+}
+
+function getUpstreamErrorMessage(operation, status) {
+  if (status === 429) return `${operation} temporarily unavailable`;
+  if (status >= 500) return `${operation} service unavailable`;
+  return `${operation} failed`;
+}
+
 async function checkRateLimit(env, ip) {
   const key = `rate:${ip}`;
   const now = Math.floor(Date.now() / 1000);
@@ -311,18 +383,12 @@ export default {
     // ── /verify-challenge ────────────────────────────────────────────────────
     if (url.pathname === "/verify-challenge") {
       if (request.method !== "POST") {
-        return corsify(new Response("Method not allowed", { status: 405 }));
+        return errorResponse('Method not allowed', 405, 'method_not_allowed');
       }
 
-      const challengeIP =
-        request.headers.get("CF-Connecting-IP") ||
-        request.headers.get("X-Forwarded-For") ||
-        null;
+      const challengeIP = getClientIp(request);
       if (!challengeIP) {
-        return corsify(new Response(
-          JSON.stringify({ error: "Could not determine client IP" }),
-          { status: 400, headers: { "Content-Type": "application/json" } }
-        ));
+        return errorResponse('Could not determine client IP', 400, 'client_ip_missing');
       }
       const challengeRate = await checkRateLimit(env, challengeIP);
       if (!challengeRate.allowed) {
@@ -337,11 +403,11 @@ export default {
           try {
             parsed = new URL(returnUrl, request.url);
           } catch {
-            return corsify(new Response('Invalid returnUrl', { status: 400 }));
+            return errorResponse('Invalid returnUrl', 400, 'invalid_return_url');
           }
           const requestOrigin = new URL(request.url).origin;
           if (parsed.origin !== requestOrigin) {
-            return corsify(new Response('returnUrl must be same-origin', { status: 400 }));
+            return errorResponse('returnUrl must be same-origin', 400, 'return_url_not_same_origin');
           }
         }
 
@@ -373,10 +439,10 @@ export default {
           );
           return corsify(redirectResponse);
         } else {
-          return corsify(new Response('Verification failed', { status: 403 }));
+          return errorResponse('Verification failed', 403, 'challenge_verification_failed');
         }
       } catch (err) {
-        return corsify(new Response('Invalid request', { status: 400 }));
+        return errorResponse('Invalid request', 400, 'invalid_request');
       }
     }
 
@@ -396,16 +462,10 @@ export default {
 
     // ── ip / rate limiting ───────────────────────────────────────────────────
 
-    const clientIP =
-      request.headers.get("CF-Connecting-IP") ||
-      request.headers.get("X-Forwarded-For") ||
-      null;
+    const clientIP = getClientIp(request);
 
     if (!clientIP) {
-      return corsify(new Response(
-        JSON.stringify({ error: "Could not determine client IP" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      ));
+      return errorResponse('Could not determine client IP', 400, 'client_ip_missing');
     }
 
     const bans = await getIpPolicy(env);
@@ -425,11 +485,10 @@ export default {
       } else if (action === 'allow') {
         // explicitly allowed, fall through
       } else {
-        return corsify(new Response(JSON.stringify({
-          error: "Access denied (unknown policy action).",
+        return errorResponse('Access denied (unknown policy action).', 403, 'unknown_policy_action', {
           reason: `IP matched policy with unknown action: ${action}`,
           action
-        }), { status: 403, headers: { "Content-Type": "application/json" } }));
+        });
       }
     }
 
@@ -454,10 +513,7 @@ export default {
     }
 
     if (request.method !== "POST") {
-      return corsify(new Response(
-        JSON.stringify({ error: "Check if you're not using POST." }),
-        { status: 405, headers: { "Content-Type": "application/json" } }
-      ));
+      return errorResponse("Check if you're not using POST.", 405, 'method_not_allowed');
     }
 
     // ── geometry dash easter egg ─────────────────────────────────────────────
@@ -490,10 +546,7 @@ export default {
         includeGroups          = normalizeBoolean(body.includeGroups, true);
         includeCool            = normalizeBoolean(body.includeCool, false);
       } catch (boolErr) {
-        return corsify(new Response(
-          JSON.stringify({ error: boolErr.message }),
-          { status: 400, headers: { "Content-Type": "application/json" } }
-        ));
+        return errorResponse(boolErr.message, 400, 'invalid_boolean_parameter');
       }
 
       // resolve username → userId
@@ -504,44 +557,32 @@ export default {
         if (cachedUserId) {
           userId = cachedUserId;
         } else {
-          const userRes = await fetch("https://users.roproxy.com/v1/usernames/users", {
+          const userRes = await fetchWithTimeout("https://users.roproxy.com/v1/usernames/users", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ usernames: [username], excludeBannedUsers: false })
           });
-          const userData = await userRes.json();
+          let userData;
+          try {
+            userData = await userRes.json();
+          } catch (err) {
+            try { userRes?.body?.cancel(); } catch {}
+            throw err;
+          }
           if (!userRes.ok) {
-            return corsify(new Response(
-              JSON.stringify({
-                error: "Failed to fetch username lookup",
-                apiStatusCode: userRes.status,
-                requestedUsername: username,
-                apiResponse: userData
-              }),
-              { status: userRes.status, headers: { "Content-Type": "application/json" } }
-            ));
+            return errorResponse(getUpstreamErrorMessage('Username lookup', userRes.status), 502, 'username_lookup_failed');
           }
           if (userData.data && userData.data.length > 0) {
             userId = userData.data[0].id;
             await kvSet(env, userIdCacheKey, userId, CACHE_TTL.profile);
           } else {
-            return corsify(new Response(
-              JSON.stringify({
-                error: "User not found",
-                requestedUsername: username,
-                apiResponse: userData
-              }),
-              { status: 404, headers: { "Content-Type": "application/json" } }
-            ));
+            return errorResponse('User not found', 404, 'user_not_found');
           }
         }
       }
 
       if (!userId) {
-        return corsify(new Response(
-          JSON.stringify({ error: "No userId or username provided" }),
-          { status: 400, headers: { "Content-Type": "application/json" } }
-        ));
+        return errorResponse('No userId or username provided', 400, 'missing_user_identifier');
       }
 
       // ── cached fetches ───────────────────────────────────────────────────
@@ -555,16 +596,21 @@ export default {
 
       // profile (always fetched)
       const profile = await cachedFetch(`profile:${userId}`, CACHE_TTL.profile, async () => {
-        const res = await fetch(`https://users.roproxy.com/v1/users/${userId}`);
-        if (!res.ok) return null;
-        return await res.json();
+        const res = await fetchWithTimeout(`https://users.roproxy.com/v1/users/${userId}`);
+        if (!res.ok) {
+          try { res?.body?.cancel(); } catch {}
+          return null;
+        }
+        try {
+          return await res.json();
+        } catch (err) {
+          try { res?.body?.cancel(); } catch {}
+          throw err;
+        }
       });
 
       if (!profile) {
-        return corsify(new Response(
-          JSON.stringify({ error: "Failed to fetch user profile" }),
-          { status: 502, headers: { "Content-Type": "application/json" } }
-        ));
+        return errorResponse('User profile unavailable', 502, 'user_profile_unavailable');
       }
 
       // build parallel fetch list with caching
@@ -573,59 +619,58 @@ export default {
 
       if (includeGroups) {
         promises.push(cachedFetch(`groups:${userId}`, CACHE_TTL.groups, async () => {
-          const res = await fetch(`https://groups.roproxy.com/v1/users/${userId}/groups/roles`);
-          return res.ok ? await res.json() : null;
+          return await fetchJsonOrNull(`https://groups.roproxy.com/v1/users/${userId}/groups/roles`);
         }));
         promiseKeys.push('groups');
       }
       if (includeAvatar) {
         promises.push(cachedFetch(`avatar:${userId}`, CACHE_TTL.avatar, async () => {
-          const res = await fetch(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`);
-          return res.ok ? await res.json() : null;
+          return await fetchJsonOrNull(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=720x720&format=Png`);
         }));
         promiseKeys.push('avatar');
       }
       if (includePresence) {
         promises.push(cachedFetch(`presence:${userId}`, CACHE_TTL.presence, async () => {
-          const res = await fetch(`https://presence.roproxy.com/v1/presence/users`, {
+          return await fetchJsonOrNull(`https://presence.roproxy.com/v1/presence/users`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userIds: [userId] })
           });
-          return res.ok ? await res.json() : null;
         }));
         promiseKeys.push('presence');
       }
       if (includeFriendsCount) {
         promises.push(cachedFetch(`friendsCount:${userId}`, CACHE_TTL.friendsCount, async () => {
-          const res = await fetch(`https://friends.roproxy.com/v1/users/${userId}/friends/count`);
-          return res.ok ? await res.json() : null;
+          return await fetchJsonOrNull(`https://friends.roproxy.com/v1/users/${userId}/friends/count`);
         }));
         promiseKeys.push('friendsCount');
       }
       if (includeFollowersCount) {
         promises.push(cachedFetch(`followersCount:${userId}`, CACHE_TTL.followersCount, async () => {
-          const res = await fetch(`https://friends.roproxy.com/v1/users/${userId}/followers/count`);
-          return res.ok ? await res.json() : null;
+          return await fetchJsonOrNull(`https://friends.roproxy.com/v1/users/${userId}/followers/count`);
         }));
         promiseKeys.push('followersCount');
       }
       if (includeFollowingCount) {
         promises.push(cachedFetch(`followingCount:${userId}`, CACHE_TTL.followingCount, async () => {
-          const res = await fetch(`https://friends.roproxy.com/v1/users/${userId}/followings/count`);
-          return res.ok ? await res.json() : null;
+          return await fetchJsonOrNull(`https://friends.roproxy.com/v1/users/${userId}/followings/count`);
         }));
         promiseKeys.push('followingCount');
       }
 
-      const results = await Promise.all(promises);
+      const results = await Promise.allSettled(promises);
 
       let groupsData = null, avatarData = null, presenceData = null;
       let friendsCountData = null, followersCountData = null, followingCountData = null;
 
       for (let i = 0; i < promiseKeys.length; i++) {
         const key = promiseKeys[i];
-        const data = results[i];
+        const result = results[i];
+        if (result.status === 'rejected') {
+          console.error(`optional ${key} fetch failed:`, result.reason);
+          continue;
+        }
+        const data = result.value;
         switch (key) {
           case 'groups':         groupsData         = data; break;
           case 'avatar':         avatarData         = data; break;
@@ -712,11 +757,13 @@ export default {
       }));
 
     } catch (err) {
+      if (err?.name === 'AbortError') {
+        return errorResponse('Upstream request timed out', 502, 'upstream_timeout');
+      }
       const isClientError = err instanceof SyntaxError || err.message?.includes('Invalid ') || err.message?.includes('Unsupported content type');
-      return corsify(new Response(JSON.stringify({ error: "Worker Error", detail: err.message }), {
-        status: isClientError ? 400 : 502,
-        headers: { "Content-Type": "application/json" }
-      }));
+      return errorResponse('Worker Error', isClientError ? 400 : 502, isClientError ? 'invalid_request_body' : 'worker_error', {
+        detail: err.message
+      });
     }
   }
 };
