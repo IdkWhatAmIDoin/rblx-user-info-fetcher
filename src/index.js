@@ -507,8 +507,15 @@ export default {
 
     // ── /health ──────────────────────────────────────────────────────────────
     if (url.pathname === "/health") {
+      const secret = request.headers.get("Secret");
+  
+      if (secret !== env.HEALTH_SECRET) {
+        return corsify(new Response("Unauthorized", { status: 401 }));
+      }
+  
       return corsify(new Response("OK", { status: 200 }));
     }
+
 
     // ── browser redirect ─────────────────────────────────────────────────────
     if (request.method === "GET") {
