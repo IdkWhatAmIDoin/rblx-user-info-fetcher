@@ -234,6 +234,7 @@ const RATE_LIMIT = 50;
 const TIME_WINDOW = 60;
 const BAN_DURATION = 3600;
 
+const RATE_LIMIT_CACHE_MAX = 500;
 const rateLimitCache = new Map();
 
 let ipPolicyCache = null;
@@ -323,6 +324,11 @@ async function checkRateLimit(env, ip) {
     }
 
     data.count++;
+
+    // evict oldest in-memory entry before adding if at cap (BUG-005)
+    if (rateLimitCache.size >= RATE_LIMIT_CACHE_MAX) {
+      rateLimitCache.delete(rateLimitCache.keys().next().value);
+    }
     rateLimitCache.set(ip, data);
 
     if (data.count > RATE_LIMIT) {
@@ -549,6 +555,9 @@ export default {
         return errorResponse(boolErr.message, 400, 'invalid_boolean_parameter');
       }
 
+      // cool check needs group data to give gemini useful context (BUG-003)
+      if (includeCool) includeGroups = true;
+
       // resolve username → userId
       if (!userId && username) {
         // cache username → userId lookups too
@@ -692,7 +701,7 @@ export default {
 
       if (profile.description) response.description = profile.description;
 
-      if (includeGroups && groupsData) {
+      if (includeGroups && groupsData?.data) {
         response.groups = groupsData.data.map(g => ({
           groupId: g.group.id,
           groupName: g.group.name,
