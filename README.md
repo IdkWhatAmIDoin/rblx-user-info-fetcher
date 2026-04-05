@@ -1,7 +1,5 @@
 # Roblox User Info Fetcher
 
-![status](https://img.shields.io/uptimerobot/status/m802389550-7ffc850247cff37f1ea4e6f9?up_message=up&up_color=green&down_message=down%2C%20the%20error%20will%20be%20fixed%20soon&down_color=red&style=flat)
-
 fetch info about any roblox user — groups, presence, avatar, social counts, and more.
 
 ---
