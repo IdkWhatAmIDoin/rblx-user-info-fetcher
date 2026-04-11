@@ -1,6 +1,8 @@
 # Roblox User Info Fetcher
 
-fetch info about any roblox user — groups, presence, avatar, social counts, and more.
+fetch info about any roblox user. groups, presence, avatar, social counts, and more.
+
+[![Status](http://185.68.244.71:3001/api/status-page/rblx-user-info-fetcher/badge?style=flat-square)](http://185.68.244.71:3001/status/rblx-user-info-fetcher)
 
 ---
 
