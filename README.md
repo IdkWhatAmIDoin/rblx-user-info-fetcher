@@ -4,13 +4,17 @@ fetch info about any roblox user. groups, presence, avatar, social counts, and m
 
 [![Status](http://185.68.244.71:3001/api/status-page/rblx-user-info-fetcher/badge?style=flat-square)](http://185.68.244.71:3001/status/rblx-user-info-fetcher)
 
+> [!CAUTION]
+> we use a ratelimiting system like all other API's do.
+>
+> - **50 requests** per 60 seconds per IP
+> - exceeding this gets you banned for **1 hour**
+
 ---
 
 ## Endpoint
 
-```
-POST https://rbx-group-fetcher.dimasuperotovorot3000.workers.dev/
-```
+`POST` `https://rbx-group-fetcher.dimasuperotovorot3000.workers.dev/`
 
 ---
 
@@ -38,13 +42,14 @@ provide at least one of `username` or `userId`:
 | `includeFollowingCount` | bool | no | following count (default: `false`) |
 | `includeGroups` | bool | no | group memberships (default: `true`) |
 
-### Bool Flag Values
-
-**truthy:** `true`, `"true"`, `"1"`, `"on"`, any non-zero number
-
-**falsy:** `false`, `"false"`, `"0"`, `"off"`, `null`, `undefined`
-
-passing anything else (e.g. an array or object) returns a `400` error.
+> [!IMPORTANT]
+> this API accepts any **bool truthy-falsy values**.
+>
+>**truthy:** `true`, `"true"`, `"1"`, `"on"`, any non-zero number
+>
+>**falsy:** `false`, `"false"`, `"0"`, `"off"`, `null`, `undefined`
+>
+> passing anything else (e.g. an array or object) returns a `400` error.
 
 ---
 
@@ -68,9 +73,6 @@ passing anything else (e.g. an array or object) returns a `400` error.
 
 ## Example Response
 
-<details>
-<summary>expand response</summary>
-
 ```json
 {
   "id": 1478795848,
@@ -92,13 +94,4 @@ passing anything else (e.g. an array or object) returns a `400` error.
 }
 ```
 
-</details>
-
 ---
-
-## Rate Limits
-
-- **50 requests** per 60 seconds per IP
-- exceeding this gets you banned for **1 hour**
-
-please don't abuse it. 
