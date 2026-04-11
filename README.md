@@ -41,6 +41,7 @@ provide at least one of `username` or `userId`:
 | `includeFollowersCount` | bool | no | follower count (default: `false`) |
 | `includeFollowingCount` | bool | no | following count (default: `false`) |
 | `includeGroups` | bool | no | group memberships (default: `true`) |
+| `includeCool` | bool | no | IS THAT GUY COOL BRO IS HE COOL (default: `false`) |
 
 > [!IMPORTANT]
 > this API accepts any **bool truthy-falsy values**.
